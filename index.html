@@ -122,9 +122,9 @@ h1{font:800 clamp(26px,5vw,38px)/1 var(--display);margin:8px 0 8px;letter-spacin
   shadowOnly.rotation.x=-Math.PI/2; shadowOnly.position.y=0.002; shadowOnly.receiveShadow=true; scene.add(shadowOnly);
 
   function applyTheme(){
-    const bg=new THREE.Color(css('--bg')||'#e4e9e1');
+    const bg=new THREE.Color(css('--bg')||'#e4e9e1').convertSRGBToLinear();
     scene.background=bg; scene.fog=new THREE.Fog(bg,6,14);
-    groundMat.color.set(css('--ground')||'#d3dbcf');
+    groundMat.color.set(css('--ground')||'#d3dbcf').convertSRGBToLinear();
   }
   applyTheme();
   const mq=window.matchMedia('(prefers-color-scheme: dark)');
@@ -158,6 +158,7 @@ h1{font:800 clamp(26px,5vw,38px)/1 var(--display);margin:8px 0 8px;letter-spacin
         o.castShadow=true; o.receiveShadow=true;
         scaleMat=o.material; scaleMat.side=THREE.DoubleSide;
         paperMat=new THREE.MeshStandardMaterial({color:0xc8551f,roughness:0.92,metalness:0,flatShading:true,side:THREE.DoubleSide});
+        paperMat.color.convertSRGBToLinear();
         const edges=new THREE.EdgesGeometry(o.geometry,1);
         wire=new THREE.LineSegments(edges,new THREE.LineBasicMaterial({color:0x111a14,transparent:true,opacity:0.55}));
         wire.visible=false; o.add(wire);
