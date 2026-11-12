@@ -372,10 +372,15 @@ function crearMar(texArena) {
   scene.add(fondoMarino);
 
   // base de la isla: muro bajo el agua para que no quede flotando
-  const forma = new THREE.Shape(CONTORNO.map(([x, z]) => new THREE.Vector2(x, z)));
-  const gb = new THREE.ExtrudeGeometry(forma, { depth: 8, bevelEnabled: false });
-  gb.rotateX(Math.PI / 2); gb.translate(0, -0.93, 0);
-  const mb = new THREE.MeshStandardMaterial({ name: 'BaseIsla', color: 0xc9c5bc, roughness: 0.95 });
+  const pos = [], arriba = -0.93, abajo = -10;
+  CONTORNO.forEach(([x1, z1], i) => {
+    const [x2, z2] = CONTORNO[(i + 1) % CONTORNO.length];
+    pos.push(x1, arriba, z1, x2, arriba, z2, x2, abajo, z2, x1, arriba, z1, x2, abajo, z2, x1, abajo, z1);
+  });
+  const gb = new THREE.BufferGeometry();
+  gb.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  gb.computeVertexNormals();
+  const mb = new THREE.MeshStandardMaterial({ name: 'BaseIsla', color: 0xc9c5bc, roughness: 0.95, side: THREE.DoubleSide });
   conMundo(mb, { c: T_CONCRETO[0], n: T_CONCRETO[1], r: T_CONCRETO[2], escala: 3, macro: 0.4, normal: 0.5,
     extra: 'diffuseColor.rgb *= mix(vec3(0.42,0.5,0.4), vec3(1.), smoothstep(-2.4, -1.1, vWPos.y));' });
   baseIsla = new THREE.Mesh(gb, mb);
