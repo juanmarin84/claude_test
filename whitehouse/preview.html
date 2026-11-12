@@ -532,7 +532,7 @@ function mejorarMateriales(modelo) {
         setC(0xffffff); m.roughness = 1; m.metalness = 0;
         conMundo(m, { c: T.adoquin[0], n: T.adoquin[1], r: T.adoquin[2], escala: 1.6, macro: 0.25, normal: 0.8 }); break;
       case nm === 'MI_Borde_Piscina':
-        setC(0xffffff); m.roughness = 1; m.metalness = 0;
+        setC(0xffffff); m.roughness = 1; m.metalness = 0; m.side = THREE.DoubleSide;
         conMundo(m, { c: T.travertino[0], n: T.travertino[1], r: T.travertino[2], escala: 2.4, macro: 0.15, normal: 0.6,
           antes: GLSL_CAUSTICAS,
           extra: 'diffuseColor.rgb *= mix(vec3(0.72, 0.9, 0.94), vec3(1.), smoothstep(-0.42, -0.3, vWPos.y));',
@@ -549,6 +549,7 @@ function mejorarMateriales(modelo) {
       case nm === 'MI_Ext_Fondo_Piscina':
       case nm === 'MI_Jacuzzi_Mosaico':
         if (nm === 'MI_Ext_Fondo_Piscina') setC(0x8fd6e0);
+        m.side = THREE.DoubleSide;
         conMundo(m, { macro: 0, antes: GLSL_CAUSTICAS, conservar: nm === 'MI_Jacuzzi_Mosaico',
           luz: `if (vWPos.y < ${nm === 'MI_Ext_Fondo_Piscina' ? '-0.3' : '0.25'}) reflectedLight.directDiffuse *= 1. + 2.4*causticas(vWPos.xz/0.7, uTiempo*1.25);` });
         break;
