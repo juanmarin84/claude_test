@@ -303,12 +303,15 @@ function materialesAgua({ fondoFijo = -999, absorcion, dispersion, escalas, fuer
     uAbs: { value: new THREE.Vector3(...absorcion) }, uDisp: { value: new THREE.Vector3(...dispersion) },
     uEsc: { value: new THREE.Vector2(...escalas) }, uFuerza: { value: fuerza }
   };
-  const vertexShader = /* glsl */`
-    varying vec3 vWPos;
-    void main(){ vec4 w = modelMatrix * vec4(position,1.); vWPos = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`;
-  const comun = GLSL_FONDO + GLSL_CIELO + /* glsl */`
+  const vertexShader = GLSL_FONDO + /* glsl */`
+    uniform float uFondoFijo;
+    varying vec3 vWPos; varying float vFondo;
+    void main(){ vec4 w = modelMatrix * vec4(position,1.); vWPos = w.xyz;
+      vFondo = uFondoFijo > -900. ? uFondoFijo : fondoMar(w.xz);
+      gl_Position = projectionMatrix * viewMatrix * w; }`;
+  const comun = GLSL_CIELO + /* glsl */`
     uniform float uTiempo, uFondoFijo, uFuerza; uniform sampler2D tNorm; uniform vec3 uHaze, uAbs, uDisp; uniform vec2 uNiebla, uEsc;
-    varying vec3 vWPos;
+    varying vec3 vWPos; varying float vFondo;
     void agua(out vec3 trans, out vec3 suma){
       vec3 wp = vWPos; float dist = length(cameraPosition - wp);
       vec2 n1 = texture2D(tNorm, wp.xz/uEsc.x + uTiempo*vec2(0.031, 0.019)).xy*2.-1.;
@@ -323,7 +326,7 @@ function materialesAgua({ fondoFijo = -999, absorcion, dispersion, escalas, fuer
       float mu = max(dot(R, uSol), 0.);
       refl += vec3(1.0,0.93,0.8) * (pow(mu, 1400.)*90. + pow(mu, 160.)*2.5);
       vec3 T = refract(-V, N, 0.75);
-      float fondo = uFondoFijo > -900. ? uFondoFijo : fondoMar(wp.xz);
+      float fondo = vFondo;
       float L = max(wp.y - fondo, 0.02) / max(-T.y, 0.12);
       vec3 tr = exp(-uAbs * L);
       vec3 luzAmb = uHorizonte*2.0;
@@ -350,7 +353,7 @@ function materialesAgua({ fondoFijo = -999, absorcion, dispersion, escalas, fuer
 /* Fondo marino: arena con ondas, manchas de algas/roca y cáusticas solo donde da el sol */
 let fondoMarino = null, baseIsla = null;
 function crearMar(texArena) {
-  const geo = new THREE.PlaneGeometry(3000, 3000, 360, 360); geo.rotateX(-Math.PI / 2);
+  const geo = new THREE.PlaneGeometry(3000, 3000, 240, 240); geo.rotateX(-Math.PI / 2);
   const mat = new THREE.MeshStandardMaterial({ name: 'FondoMarino', color: 0xcfc6b2, roughness: 1 });
   conMundo(mat, { c: texArena[0], n: texArena[1], r: texArena[2], escala: 4, macro: 0.5, normal: 0.6,
     verticeAntes: GLSL_FONDO, uniformes: { uPoli },
@@ -362,7 +365,7 @@ function crearMar(texArena) {
       diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.16, 0.17, 0.10), alga*0.85);`,
     luz: `{ float dCam = length(cameraPosition - vWPos);
       float k = smoothstep(60., 12., dCam) * smoothstep(-12., -3., vWPos.y);
-      reflectedLight.directDiffuse *= 1. + 1.8*k*causticas(vWPos.xz/0.85, uTiempo*1.1); }` });
+      if (k > 0.01) reflectedLight.directDiffuse *= 1. + 1.8*k*causticas(vWPos.xz/0.85, uTiempo*1.1); }` });
   fondoMarino = new THREE.Mesh(geo, mat);
   fondoMarino.receiveShadow = true;
   fondoMarino.frustumCulled = false;
@@ -380,7 +383,7 @@ function crearMar(texArena) {
   scene.add(baseIsla);
 
   const [mult, add] = materialesAgua({ absorcion: [0.5, 0.13, 0.095], dispersion: [0.0, 0.11, 0.17], escalas: [2.6, 6.5], fuerza: 0.28 });
-  const geoAgua = new THREE.PlaneGeometry(6000, 6000); geoAgua.rotateX(-Math.PI / 2);
+  const geoAgua = new THREE.PlaneGeometry(6000, 6000, 400, 400); geoAgua.rotateX(-Math.PI / 2);
   const s1 = new THREE.Mesh(geoAgua, mult), s2 = new THREE.Mesh(geoAgua, add);
   s1.position.y = s2.position.y = NIVEL_MAR;
   s1.renderOrder = 0; s2.renderOrder = 1;
