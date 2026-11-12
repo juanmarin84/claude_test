@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>White House Miami — Recorrido 3D</title>
+<link rel="icon" href="assets/logo.png">
+<style>
+:root{--ink:#1d2228;--muted:#6b7480;--gold:#b88a2c;--panel:rgba(255,255,255,.88);--line:rgba(0,0,0,.08);
+  --font:"Montserrat","Segoe UI",system-ui,-apple-system,sans-serif}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:#fff;color:var(--ink);font-family:var(--font)}
+canvas{display:block;position:fixed;inset:0;width:100%;height:100%;touch-action:none}
+button{font:inherit}
+
+/* ---------- Inicio ---------- */
+#inicio{position:fixed;inset:0;z-index:30;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:56px;
+  transition:opacity .8s ease, visibility .8s}
+#inicio.oculto{opacity:0;visibility:hidden}
+#inicio img{width:min(560px,78vw);height:auto}
+#btnInicio{min-width:150px;padding:13px 30px;border:0;border-radius:3px;background:#383d46;color:#fff;font-weight:600;font-size:15px;letter-spacing:.04em;cursor:pointer;
+  transition:background .2s, opacity .3s}
+#btnInicio:hover{background:#23272e}
+#btnInicio:disabled{opacity:.55;cursor:progress}
+#carga{font-size:12px;color:var(--muted);letter-spacing:.08em;height:14px;margin-top:-40px}
+
+/* ---------- HUD ---------- */
+.hud{position:fixed;z-index:10;pointer-events:none}
+.hud *{pointer-events:auto}
+#logo{top:max(14px,env(safe-area-inset-top));left:max(14px,env(safe-area-inset-left));background:#fff;border-radius:3px;padding:6px 10px;box-shadow:0 2px 10px rgba(0,0,0,.12)}
+#logo img{height:42px;display:block}
+#menu{top:max(14px,env(safe-area-inset-top));right:max(14px,env(safe-area-inset-right));display:flex;gap:8px;align-items:flex-start}
+.btn{background:var(--panel);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:3px;color:var(--ink);
+  padding:9px 16px;font-size:13px;font-weight:600;letter-spacing:.02em;cursor:pointer;min-width:118px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.08);
+  transition:background .15s,color .15s}
+.btn:hover{background:#fff}
+.btn.activo{background:#383d46;color:#fff;border-color:#383d46}
+#pisos{display:flex;flex-direction:column;gap:6px}
+#listaPisos{display:flex;flex-direction:column;gap:6px;overflow:hidden;max-height:0;transition:max-height .35s ease}
+#listaPisos.abierto{max-height:220px}
+#modo{left:max(14px,env(safe-area-inset-left));top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:6px;
+  opacity:0;visibility:hidden;transition:opacity .4s, visibility .4s}
+#modo.visible{opacity:1;visibility:visible}
+#modo .btn{min-width:72px}
+#ayuda{left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);font-size:12px;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.6);
+  white-space:nowrap;transition:opacity .6s}
+#fundido{position:fixed;inset:0;background:#fff;z-index:20;opacity:0;pointer-events:none;transition:opacity .35s ease}
+#fundido.on{opacity:1}
+
+/* ---------- Recorrido 360 ---------- */
+#tour{position:fixed;inset:0;z-index:40;background:#fff;display:none}
+#tour.abierto{display:block}
+#tour iframe{border:0;width:100%;height:100%;display:block}
+#cerrarTour{position:absolute;top:max(14px,env(safe-area-inset-top));right:max(14px,env(safe-area-inset-right));z-index:2}
+
+@media (max-width:600px){
+  #logo img{height:30px}
+  .btn{min-width:92px;padding:8px 10px;font-size:12px}
+  #ayuda{display:none}
+}
+</style>
+<script type="importmap">
+{ "imports": { "three": "./lib/three.module.min.js" } }
+</script>
+</head>
+<body>
+
+<div id="inicio">
+  <img src="assets/logo.png" alt="White House Miami">
+  <button id="btnInicio" disabled>Inicio</button>
+  <div id="carga">Cargando modelo… 0%</div>
+</div>
+
+<div id="logo" class="hud"><img src="assets/logo.png" alt="White House Miami"></div>
+
+<div id="menu" class="hud">
+  <button class="btn" id="btnTour">Recorrido 360</button>
+  <div id="pisos">
+    <button class="btn" id="btnPisos" aria-expanded="false">Pisos</button>
+    <div id="listaPisos">
+      <button class="btn" data-piso="1">Piso 1</button>
+      <button class="btn" data-piso="2">Piso 2</button>
+      <button class="btn" data-piso="3">Piso 3</button>
+      <button class="btn" data-piso="0">Vista general</button>
+    </div>
+  </div>
+</div>
+
+<div id="modo" class="hud">
+  <button class="btn" data-modo="2d">2D</button>
+  <button class="btn activo" data-modo="3d">3D</button>
+</div>
+
+<div id="ayuda" class="hud">Arrastra para girar · rueda o pellizco para acercar · clic derecho para desplazar</div>
+<div id="fundido"></div>
+
+<div id="tour">
+  <button class="btn" id="cerrarTour">Cerrar</button>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from './lib/jsm/loaders/GLTFLoader.js';
+import { OrbitControls } from './lib/jsm/controls/OrbitControls.js';
+import { Sky } from './lib/jsm/objects/Sky.js';
+
+/* Coordenadas: el exportador glTF de Unreal convierte (X,Y,Z) cm -> (X, Z, Y) m. */
+const ue = (x, y, z) => new THREE.Vector3(x / 100, z / 100, y / 100);
+
+const TOUR_URL = 'https://panoraven.com/es/embed/EtcZ5QmwUT';
+const PLANTA = { centro: ue(6, -642, 0), alto: 20.05 };                       // cámara ortográfica de Unreal (OrthoWidth 2005)
+const PLANO = { centro: ue(-134.6, -541.6, 470), ancho: 41.384, alto: 29.917 }; // imagen P1 alineada con el modelo
+const VISTA_GENERAL = { pos: new THREE.Vector3(52, 30, -42), target: ue(0, -900, 250) };
+
+/* ---------- Render ---------- */
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.9;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0xcfe3f2, 180, 900);
+
+const persp = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 3000);
+persp.position.copy(VISTA_GENERAL.pos);
+const orto = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 200);
+orto.up.set(0, 0, -1);                       // arriba de la pantalla = -Y de Unreal, igual que la vista de planta
+let camara = persp;
+
+const controls = new OrbitControls(persp, renderer.domElement);
+controls.target.copy(VISTA_GENERAL.target);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI * 0.47;
+controls.minDistance = 8;
+controls.maxDistance = 140;
+controls.update();
+
+/* ---------- Cielo, sol y mar ---------- */
+const sky = new Sky();
+sky.scale.setScalar(4500);
+scene.add(sky);
+const sol = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(52), THREE.MathUtils.degToRad(215));
+sky.material.uniforms.turbidity.value = 3;
+sky.material.uniforms.rayleigh.value = 1.2;
+sky.material.uniforms.mieCoefficient.value = 0.004;
+sky.material.uniforms.mieDirectionalG.value = 0.8;
+sky.material.uniforms.sunPosition.value.copy(sol);
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+const envScene = new THREE.Scene(); const skyEnv = sky.clone(); envScene.add(skyEnv);
+scene.environment = pmrem.fromScene(envScene, 0, 0.1, 5000).texture;
+
+const luzSol = new THREE.DirectionalLight(0xfff3e0, 3.0);
+luzSol.position.copy(sol).multiplyScalar(60);
+luzSol.castShadow = true;
+luzSol.shadow.mapSize.set(4096, 4096);
+luzSol.shadow.bias = -0.0004;
+luzSol.shadow.normalBias = 0.02;
+Object.assign(luzSol.shadow.camera, { left: -38, right: 38, top: 38, bottom: -38, near: 1, far: 160 });
+scene.add(luzSol, luzSol.target);
+scene.add(new THREE.HemisphereLight(0xdcecff, 0xb9a98a, 0.6));
+
+const mar = new THREE.Mesh(new THREE.CircleGeometry(2500, 96),
+  new THREE.MeshStandardMaterial({ color: 0x1f86b8, roughness: 0.12, metalness: 0.0, envMapIntensity: 0.9 }));
+mar.rotation.x = -Math.PI / 2;
+mar.position.y = -0.9;
+mar.receiveShadow = true;
+scene.add(mar);
+
+/* ---------- Plano P1 (2D / 3D) ---------- */
+const texLoader = new THREE.TextureLoader();
+const texturaPlano = (url) => { const t = texLoader.load(url); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = renderer.capabilities.getMaxAnisotropy(); return t; };
+const tex2D = texturaPlano('assets/P1.webp');
+const tex3D = texturaPlano('assets/P1_3D_U.webp');
+const matPlano = new THREE.MeshBasicMaterial({ map: tex3D, transparent: true, toneMapped: false, depthWrite: false, depthTest: false });
+const plano = new THREE.Mesh(new THREE.PlaneGeometry(PLANO.ancho, PLANO.alto), matPlano);
+plano.rotation.x = -Math.PI / 2;
+plano.position.copy(PLANO.centro);
+plano.renderOrder = 10;
+plano.visible = false;
+scene.add(plano);
+
+/* ---------- Modelo ---------- */
+let grupos = {};
+const nodos = [];
+const elCarga = document.getElementById('carga');
+const btnInicio = document.getElementById('btnInicio');
+
+fetch('assets/grupos.json').then(r => r.json()).then(g => { grupos = g; });
+
+new GLTFLoader().load('assets/whitehouse.glb', (gltf) => {
+  const modelo = gltf.scene;
+  modelo.traverse((o) => {
+    if (o.isMesh) {
+      const m = o.material;
+      const vidrio = m.transparent || (m.name || '').includes('Vidrio');
+      o.castShadow = !vidrio;
+      o.receiveShadow = true;
+      if (vidrio) { m.depthWrite = false; m.envMapIntensity = 1.5; }
+      if (m.aoMap) { m.aoMap = null; m.needsUpdate = true; }   // la oclusión 1x1 exportada oscurece las sombras
+    }
+  });
+  modelo.children.forEach((n) => nodos.push(n));
+  scene.add(modelo);
+  elCarga.textContent = 'Listo';
+  btnInicio.disabled = false;
+}, (e) => {
+  if (e.total) elCarga.textContent = `Cargando modelo… ${Math.round(e.loaded / e.total * 100)}%`;
+}, (err) => {
+  console.error(err);
+  elCarga.textContent = 'No se pudo cargar el modelo. Recarga la página.';
+});
+
+/* ---------- Visibilidad por piso (misma lógica que Unreal) ---------- */
+function aplicarPiso(n) {
+  for (const nodo of nodos) {
+    const t = grupos[nodo.name] || [];
+    let oculto = false;
+    if (n > 0) {
+      for (const tag of t) {
+        const m = tag.match(/^(?:Mobiliario_)?Piso_(\d)$/);
+        if (m && +m[1] > n) oculto = true;
+        if (tag === 'Cubierta') oculto = true;
+        if (tag === `OcultarEnPlanta_${n}`) oculto = true;
+      }
+    }
+    nodo.visible = !oculto;
+  }
+}
+
+/* ---------- Cámaras y transiciones ---------- */
+let pisoActual = 0, animando = false;
+const fundido = document.getElementById('fundido');
+const panelModo = document.getElementById('modo');
+const ayuda = document.getElementById('ayuda');
+
+function ajustarOrto() {
+  const asp = innerWidth / innerHeight;
+  const alto = Math.max(PLANTA.alto, 27 / asp);   // en pantallas verticales cabe la casa completa
+  orto.left = -alto * asp / 2; orto.right = alto * asp / 2; orto.top = alto / 2; orto.bottom = -alto / 2;
+  orto.zoom = 1;
+  orto.updateProjectionMatrix();
+}
+
+const espera = (ms) => new Promise((r) => setTimeout(r, ms));
+function tween(dur, fn) {
+  return new Promise((res) => {
+    const t0 = performance.now();
+    const paso = (t) => {
+      const k = Math.min(1, (t - t0) / dur), e = k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+      fn(e); if (k < 1) requestAnimationFrame(paso); else res();
+    };
+    requestAnimationFrame(paso);
+  });
+}
+
+async function irAPiso(n) {
+  if (animando || n === pisoActual) return;
+  animando = true;
+  plano.visible = false; panelModo.classList.remove('visible');
+
+  if (n > 0) {
+    if (camara === persp) {
+      // Vuelo hasta encima de la casa con la cámara perspectiva
+      const p0 = persp.position.clone(), t0 = controls.target.clone();
+      const altura = PLANTA.alto / 2 / Math.tan(THREE.MathUtils.degToRad(persp.fov / 2));
+      const p1 = PLANTA.centro.clone().add(new THREE.Vector3(0, altura + 4, 0.01));
+      controls.enabled = false;
+      await tween(1400, (e) => { persp.position.lerpVectors(p0, p1, e); controls.target.lerpVectors(t0, PLANTA.centro, e); persp.lookAt(controls.target); });
+    }
+    fundido.classList.add('on'); await espera(350);
+    aplicarPiso(n);
+    ajustarOrto();
+    orto.position.copy(PLANTA.centro).add(new THREE.Vector3(0, 60, 0));
+    orto.lookAt(PLANTA.centro);
+    camara = orto;
+    controls.object = orto;
+    controls.target.copy(PLANTA.centro);
+    controls.enableRotate = false;
+    controls.screenSpacePanning = true;
+    controls.minZoom = 0.8; controls.maxZoom = 6;
+    controls.enabled = true; controls.update();
+    if (n === 1) { usarModo('3d'); plano.visible = true; panelModo.classList.add('visible'); }
+    fundido.classList.remove('on');
+  } else {
+    fundido.classList.add('on'); await espera(350);
+    aplicarPiso(0);
+    camara = persp; controls.object = persp; controls.enableRotate = true;
+    const altura = PLANTA.alto / 2 / Math.tan(THREE.MathUtils.degToRad(persp.fov / 2));
+    persp.position.copy(PLANTA.centro).add(new THREE.Vector3(0, altura + 4, 0.01));
+    controls.target.copy(PLANTA.centro); persp.lookAt(PLANTA.centro);
+    fundido.classList.remove('on');
+    controls.enabled = false;
+    const p0 = persp.position.clone(), t0 = controls.target.clone();
+    await tween(1600, (e) => { persp.position.lerpVectors(p0, VISTA_GENERAL.pos, e); controls.target.lerpVectors(t0, VISTA_GENERAL.target, e); persp.lookAt(controls.target); });
+    controls.enabled = true; controls.update();
+  }
+  pisoActual = n;
+  document.querySelectorAll('[data-piso]').forEach((b) => b.classList.toggle('activo', +b.dataset.piso === n && n > 0));
+  animando = false;
+}
+
+function usarModo(m) {
+  matPlano.map = m === '2d' ? tex2D : tex3D;
+  matPlano.needsUpdate = true;
+  document.querySelectorAll('[data-modo]').forEach((b) => b.classList.toggle('activo', b.dataset.modo === m));
+}
+
+/* ---------- Interfaz ---------- */
+document.getElementById('btnInicio').addEventListener('click', () => {
+  document.getElementById('inicio').classList.add('oculto');
+  setTimeout(() => (ayuda.style.opacity = 0), 7000);
+});
+const lista = document.getElementById('listaPisos');
+document.getElementById('btnPisos').addEventListener('click', (e) => {
+  const abierto = lista.classList.toggle('abierto');
+  e.currentTarget.setAttribute('aria-expanded', abierto);
+});
+document.querySelectorAll('[data-piso]').forEach((b) => b.addEventListener('click', () => irAPiso(+b.dataset.piso)));
+document.querySelectorAll('[data-modo]').forEach((b) => b.addEventListener('click', () => usarModo(b.dataset.modo)));
+
+const tour = document.getElementById('tour');
+document.getElementById('btnTour').addEventListener('click', () => {
+  if (!tour.querySelector('iframe')) {
+    const f = document.createElement('iframe');
+    f.src = TOUR_URL; f.allow = 'accelerometer; magnetometer; gyroscope; xr-spatial-tracking; fullscreen'; f.allowFullscreen = true;
+    tour.appendChild(f);
+  }
+  tour.classList.add('abierto');
+});
+document.getElementById('cerrarTour').addEventListener('click', () => tour.classList.remove('abierto'));
+
+addEventListener('resize', () => {
+  renderer.setSize(innerWidth, innerHeight);
+  persp.aspect = innerWidth / innerHeight; persp.updateProjectionMatrix();
+  if (camara === orto) ajustarOrto();
+});
+
+renderer.setAnimationLoop(() => {
+  if (controls.enabled) controls.update();
+  renderer.render(scene, camara);
+});
+</script>
+</body>
+</html>
