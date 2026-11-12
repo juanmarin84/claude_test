@@ -10,9 +10,10 @@ Archivos: `index.html` (visor), `assets/whitehouse.glb` (modelo exportado desde 
 
 ## Ambiente realista (noviembre 2026)
 
-- **Cielo**: degradado atmosférico HDR con halo y disco solar; sol de tarde (elevación 38°, azimut 196°) con sombras suaves 4K.
+- **Cielo y luz**: degradado atmosférico HDR con halo y disco solar; sol de tarde (elevación 38°, azimut 196°) intenso y luz de cielo alta para sombras suaves y azuladas.
 - **Nubes**: capa volumétrica procedimental animada (raymarch sobre una capa de 1,4–2,1 km), sin texturas.
-- **Mar**: `Water.js` con reflejos, olas animadas, sombras y color turquesa cerca de la isla que se vuelve azul profundo mar adentro.
-- **Materiales**: texturas procedimentales propias en `assets/tex/` (pasto, grava, concreto, adoquín, travertino, deck) proyectadas en coordenadas de mundo con variación macro para que no se note la repetición; estuco blanco sutil, vidrio y metales PBR, agua de piscina animada con cáusticas en el fondo.
+- **Mar poco profundo**: superficie transparente con olas a escala real (2,6 m y 6,5 m), reflejo del cielo y brillo del sol; se ve el fondo de arena con manchas de algas, cáusticas animadas y las sombras de la casa. El fondo baja de 3 m junto a la isla a unos 30 m mar adentro, y el color pasa de turquesa a azul profundo según la profundidad (absorción física por canal de color). Nivel del agua: −1,35 m. La isla tiene un muro de base bajo el agua.
+- **Materiales**: texturas procedimentales propias en `assets/tex/` (pasto, grava, concreto, adoquín, travertino, deck) proyectadas en coordenadas de mundo con variación macro para que no se note la repetición; estuco blanco sutil, vidrio y metales PBR, agua de piscina y jacuzzi transparente con olas pequeñas y cáusticas animadas en el fondo y las paredes.
+- **Palmas**: se mueven con el viento (tronco e inclinación por ráfagas, hojas ondeando hacia las puntas, sombras que también se mueven), con variación de color, puntas amarillentas y luz que atraviesa las hojas a contraluz.
 - **Postprocesado**: oclusión ambiental GTAO, brillo suave (bloom) y tonos ACES.
 - **Calidad**: en celulares se apagan GTAO y MSAA automáticamente. Se puede forzar con `?calidad=alta` o `?calidad=media`.

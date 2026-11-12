@@ -102,7 +102,6 @@ button{font:inherit}
 import * as THREE from 'three';
 import { GLTFLoader } from './lib/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from './lib/jsm/controls/OrbitControls.js';
-import { Water } from './lib/jsm/objects/Water.js';
 import { EffectComposer } from './lib/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from './lib/jsm/postprocessing/RenderPass.js';
 import { GTAOPass } from './lib/jsm/postprocessing/GTAOPass.js';
@@ -129,7 +128,7 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, ALTA ? 1.75 : 1.5));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.55;
+renderer.toneMappingExposure = 0.6;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.prepend(renderer.domElement);
@@ -245,7 +244,7 @@ const envScene = new THREE.Scene(); const skyEnv = sky.clone(); skyEnv.material 
 
 scene.environment = pmrem.fromScene(envScene, 0, 0.1, 9000).texture;
 
-const luzSol = new THREE.DirectionalLight(0xfff1dc, 6.0);
+const luzSol = new THREE.DirectionalLight(0xfff3e2, 7.4);
 luzSol.position.copy(sol).multiplyScalar(80).add(CENTRO_SITIO);
 luzSol.target.position.copy(CENTRO_SITIO);
 luzSol.castShadow = true;
@@ -255,30 +254,146 @@ luzSol.shadow.normalBias = 0.03;
 Object.assign(luzSol.shadow.camera, { left: -40, right: 40, top: 40, bottom: -40, near: 1, far: 200 });
 scene.add(luzSol, luzSol.target);
 
-/* ---------- Mar: reflejos, olas y color turquesa cerca de la costa ---------- */
+/* ---------- Mar poco profundo: superficie transparente + fondo de arena con cáusticas ---------- */
 const texLoader = new THREE.TextureLoader();
 const normalesAgua = texLoader.load('assets/tex/waternormals.webp');
 normalesAgua.wrapS = normalesAgua.wrapT = THREE.RepeatWrapping;
-const mar = new Water(new THREE.PlaneGeometry(12000, 12000), {
-  textureWidth: ALTA ? 1024 : 512, textureHeight: ALTA ? 1024 : 512,
-  waterNormals: normalesAgua, sunDirection: sol.clone(), sunColor: 0xfff4e2,
-  waterColor: 0x0b3f55, distortionScale: 2.4, fog: true, alpha: 1
-});
-mar.rotation.x = -Math.PI / 2;
-mar.position.y = -0.9;
-mar.receiveShadow = true;
-mar.material.uniforms.size.value = 0.5;
-mar.material.uniforms.uCosta = { value: new THREE.Vector2(CENTRO_SITIO.x, CENTRO_SITIO.z) };
-mar.material.fragmentShader = mar.material.fragmentShader
-  .replace('uniform vec3 waterColor;', 'uniform vec3 waterColor; uniform vec2 uCosta;')
-  .replace('vec3 scatter = max( 0.0, dot( surfaceNormal, eyeDirection ) ) * waterColor;',
-    `float dCosta = length(worldPosition.xz - uCosta);
-     vec3 colAgua = mix(vec3(0.03,0.36,0.40), waterColor, smoothstep(40.0, 220.0, dCosta));
-     vec3 scatter = max( 0.0, dot( surfaceNormal, eyeDirection ) ) * colAgua;`)
-  .replace('float rf0 = 0.3;', 'float rf0 = 0.035;')
-  .replace('float reflectance = rf0 + ( 1.0 - rf0 ) * pow( ( 1.0 - theta ), 5.0 );', 'float reflectance = min(rf0 + ( 1.0 - rf0 ) * pow( ( 1.0 - theta ), 5.0 ), 0.62);');
-{ const orig = mar.onBeforeRender; mar.onBeforeRender = (...a) => { const v = nubes.visible; nubes.visible = false; orig.apply(mar, a); nubes.visible = v; }; }
-scene.add(mar);
+
+const GLSL_RUIDO = /* glsl */`
+  float hR(vec3 p){ p = fract(p*0.3183099+.1); p*=17.; return fract(p.x*p.y*p.z*(p.x+p.y+p.z)); }
+  float vnoise(vec3 x){ vec3 i=floor(x), f=fract(x); f=f*f*(3.-2.*f);
+    return mix(mix(mix(hR(i),hR(i+vec3(1,0,0)),f.x),mix(hR(i+vec3(0,1,0)),hR(i+vec3(1,1,0)),f.x),f.y),
+               mix(mix(hR(i+vec3(0,0,1)),hR(i+vec3(1,0,1)),f.x),mix(hR(i+vec3(0,1,1)),hR(i+vec3(1,1,1)),f.x),f.y),f.z); }`;
+
+/* Viento: el tronco se inclina con la altura y las hojas ondean más hacia las puntas */
+const GLSL_VIENTO = /* glsl */`
+  void viento(inout vec3 p, float hoja){
+    vec3 base = vec3(modelMatrix[3].x, modelMatrix[3].y, modelMatrix[3].z);
+    float ph = dot(base.xz, vec2(0.37, 0.21));
+    vec2 dir = normalize(vec2(1.0, 0.45));
+    float k = pow(max(p.y, 0.) / 9.5, 2.);
+    float rafaga = 0.6 + 0.4*sin(uTiempo*0.23 + ph*0.5);
+    float s = (sin(uTiempo*0.95 + ph)*0.65 + sin(uTiempo*1.9 + ph*1.7)*0.25) * rafaga;
+    p.xz += dir * (0.12 + 0.16*s) * k;
+    if (hoja > 0.5){
+      float r = length(p.xz);
+      float fl = sin(uTiempo*3.3 + ph*2.0 + r*1.6 + p.x*0.8) * 0.055 * r * rafaga;
+      p.y += fl;
+      p.xz += dir * 0.035 * r * sin(uTiempo*2.4 + ph + r*1.3) * rafaga;
+    }
+  }`;
+
+const GLSL_CIELO = /* glsl */`
+  uniform vec3 uSol, uCenit, uHorizonte;
+  vec3 colorCielo(vec3 d){
+    float y = max(d.y, 0.);
+    vec3 c = mix(uHorizonte*2.2, uCenit*2.3, pow(y, 0.3));
+    float mu = max(dot(d, uSol), 0.);
+    vec3 sc = vec3(1.0, 0.92, 0.78);
+    c += sc * pow(mu, 8.)*0.55;
+    return c; }`;
+
+/* Dos pasadas: (1) multiplica lo que hay debajo por la transmitancia del agua, (2) suma reflejo y color propio */
+function materialesAgua({ fondoFijo = -999, absorcion, dispersion, escalas, fuerza }) {
+  const uniforms = {
+    uTiempo, tNorm: { value: normalesAgua }, uSol: { value: sol },
+    uCenit: sky.material.uniforms.uCenit, uHorizonte: sky.material.uniforms.uHorizonte,
+    uHaze: { value: HAZE }, uNiebla: { value: new THREE.Vector2(scene.fog.near, scene.fog.far) },
+    uPoli, uFondoFijo: { value: fondoFijo },
+    uAbs: { value: new THREE.Vector3(...absorcion) }, uDisp: { value: new THREE.Vector3(...dispersion) },
+    uEsc: { value: new THREE.Vector2(...escalas) }, uFuerza: { value: fuerza }
+  };
+  const vertexShader = GLSL_FONDO + /* glsl */`
+    uniform float uFondoFijo;
+    varying vec3 vWPos; varying float vFondo;
+    void main(){ vec4 w = modelMatrix * vec4(position,1.); vWPos = w.xyz;
+      vFondo = uFondoFijo > -900. ? uFondoFijo : fondoMar(w.xz);
+      gl_Position = projectionMatrix * viewMatrix * w; }`;
+  const comun = GLSL_CIELO + /* glsl */`
+    uniform float uTiempo, uFondoFijo, uFuerza; uniform sampler2D tNorm; uniform vec3 uHaze, uAbs, uDisp; uniform vec2 uNiebla, uEsc;
+    varying vec3 vWPos; varying float vFondo;
+    void agua(out vec3 trans, out vec3 suma){
+      vec3 wp = vWPos; float dist = length(cameraPosition - wp);
+      vec2 n1 = texture2D(tNorm, wp.xz/uEsc.x + uTiempo*vec2(0.031, 0.019)).xy*2.-1.;
+      vec2 n2 = texture2D(tNorm, wp.xz/uEsc.y + uTiempo*vec2(-0.017, 0.027)).xy*2.-1.;
+      vec2 dn = (n1 + n2) * uFuerza / (1. + dist*0.012);
+      vec3 N = normalize(vec3(dn.x, 1., dn.y));
+      vec3 V = normalize(cameraPosition - wp);
+      float cosT = max(dot(N, V), 0.);
+      float fres = 0.02 + 0.98*pow(1. - cosT, 5.);
+      vec3 R = reflect(-V, N); R.y = abs(R.y);
+      vec3 refl = colorCielo(R);
+      float mu = max(dot(R, uSol), 0.);
+      refl += vec3(1.0,0.93,0.8) * (pow(mu, 1400.)*90. + pow(mu, 160.)*2.5);
+      vec3 T = refract(-V, N, 0.75);
+      float fondo = vFondo;
+      float L = max(wp.y - fondo, 0.02) / max(-T.y, 0.12);
+      vec3 tr = exp(-uAbs * L);
+      vec3 luzAmb = uHorizonte*2.0;
+      vec3 disp = uDisp * luzAmb * (1. - tr);
+      trans = tr * (1. - fres);
+      suma = disp * (1. - fres) + refl * fres;
+      float nb = smoothstep(uNiebla.x, uNiebla.y, dist);
+      trans = mix(trans, vec3(0.), nb);
+      suma = mix(suma, uHaze, nb);
+    }`;
+  const mult = new THREE.ShaderMaterial({
+    uniforms, vertexShader, transparent: true, depthWrite: false,
+    blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.ZeroFactor, blendDst: THREE.SrcColorFactor,
+    fragmentShader: comun + 'void main(){ vec3 t, s; agua(t, s); gl_FragColor = vec4(t, 1.); }'
+  });
+  const add = new THREE.ShaderMaterial({
+    uniforms, vertexShader, transparent: true, depthWrite: false,
+    blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor,
+    fragmentShader: comun + 'void main(){ vec3 t, s; agua(t, s); gl_FragColor = vec4(s, 1.); }'
+  });
+  return [mult, add];
+}
+
+/* Fondo marino: arena con ondas, manchas de algas/roca y cáusticas solo donde da el sol */
+let fondoMarino = null, baseIsla = null;
+function crearMar(texArena) {
+  const geo = new THREE.PlaneGeometry(3000, 3000, 240, 240); geo.rotateX(-Math.PI / 2);
+  const mat = new THREE.MeshStandardMaterial({ name: 'FondoMarino', color: 0xcfc6b2, roughness: 1 });
+  conMundo(mat, { c: texArena[0], n: texArena[1], r: texArena[2], escala: 4, macro: 0.5, normal: 0.6,
+    verticeAntes: GLSL_FONDO, uniformes: { uPoli },
+    vertice: 'transformed.y = fondoMar(transformed.xz);',
+    normalVert: 'objectNormal = normalize(vec3(fondoMar(position.xz - vec2(1.,0.)) - fondoMar(position.xz + vec2(1.,0.)), 2., fondoMar(position.xz - vec2(0.,1.)) - fondoMar(position.xz + vec2(0.,1.))));',
+    antes: GLSL_CAUSTICAS + GLSL_RUIDO,
+    extra: `
+      float alga = smoothstep(0.58, 0.72, vnoise(vec3(vWPos.xz*0.09, 1.)) * 0.7 + vnoise(vec3(vWPos.xz*0.31, 2.)) * 0.3);
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.16, 0.17, 0.10), alga*0.85);`,
+    luz: `{ float dCam = length(cameraPosition - vWPos);
+      float k = smoothstep(60., 12., dCam) * smoothstep(-12., -3., vWPos.y);
+      if (k > 0.01) reflectedLight.directDiffuse *= 1. + 1.8*k*causticas(vWPos.xz/0.85, uTiempo*1.1); }` });
+  fondoMarino = new THREE.Mesh(geo, mat);
+  fondoMarino.receiveShadow = true;
+  fondoMarino.frustumCulled = false;
+  scene.add(fondoMarino);
+
+  // base de la isla: muro bajo el agua para que no quede flotando
+  const pos = [], arriba = -0.93, abajo = -10;
+  CONTORNO.forEach(([x1, z1], i) => {
+    const [x2, z2] = CONTORNO[(i + 1) % CONTORNO.length];
+    pos.push(x1, arriba, z1, x2, arriba, z2, x2, abajo, z2, x1, arriba, z1, x2, abajo, z2, x1, abajo, z1);
+  });
+  const gb = new THREE.BufferGeometry();
+  gb.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  gb.computeVertexNormals();
+  const mb = new THREE.MeshStandardMaterial({ name: 'BaseIsla', color: 0xc9c5bc, roughness: 0.95, side: THREE.DoubleSide });
+  conMundo(mb, { c: T_CONCRETO[0], n: T_CONCRETO[1], r: T_CONCRETO[2], escala: 3, macro: 0.4, normal: 0.5,
+    extra: 'diffuseColor.rgb *= mix(vec3(0.42,0.5,0.4), vec3(1.), smoothstep(-2.4, -1.1, vWPos.y));' });
+  baseIsla = new THREE.Mesh(gb, mb);
+  baseIsla.receiveShadow = true;
+  scene.add(baseIsla);
+
+  const [mult, add] = materialesAgua({ absorcion: [0.5, 0.13, 0.095], dispersion: [0.0, 0.11, 0.17], escalas: [2.6, 6.5], fuerza: 0.28 });
+  const geoAgua = new THREE.PlaneGeometry(6000, 6000, 400, 400); geoAgua.rotateX(-Math.PI / 2);
+  const s1 = new THREE.Mesh(geoAgua, mult), s2 = new THREE.Mesh(geoAgua, add);
+  s1.position.y = s2.position.y = NIVEL_MAR;
+  s1.renderOrder = 0; s2.renderOrder = 1;
+  scene.add(s1, s2);
+}
 
 /* ---------- Materiales con proyección en coordenadas de mundo (sin repetición visible) ---------- */
 const anis = Math.min(8, renderer.capabilities.getMaxAnisotropy());
@@ -289,9 +404,10 @@ const tex = (n, srgb) => {
   return t;
 };
 const texMacro = tex('macro', false);
+const T_CONCRETO = [tex('concreto_c', true), tex('concreto_n'), tex('concreto_r')];
 
 const GLSL_COMUN = /* glsl */`
-  varying vec3 vWPos; varying vec3 vWNor;
+  varying vec3 vWPos; varying vec3 vWNor; varying vec3 vLoc;
   uniform float uTiempo;
   vec3 pesosTri(){ vec3 w = pow(abs(normalize(vWNor)), vec3(4.)); return w/(w.x+w.y+w.z); }
   vec4 tri(sampler2D t, float esc){ vec3 w = pesosTri();
@@ -304,7 +420,7 @@ const GLSL_COMUN = /* glsl */`
   }`;
 
 function conMundo(mat, opciones) {
-  const { c, n, r, escala = 2, macro = 0.25, normal = 1, rugosidad = 1, extra = '', antes = '', conservar = false } = opciones;
+  const { c, n, r, escala = 2, macro = 0.25, normal = 1, rugosidad = 1, extra = '', antes = '', conservar = false, vertice = '', verticeAntes = '', normalVert = '', luz = '', uniformes = {} } = opciones;
   if (!conservar) { mat.map = null; mat.normalMap = null; mat.roughnessMap = null; mat.metalnessMap = null; }
   mat.aoMap = null;
   mat.onBeforeCompile = (sh) => {
@@ -312,7 +428,11 @@ function conMundo(mat, opciones) {
     if (c) sh.uniforms.tC = { value: c };
     if (n) sh.uniforms.tN = { value: n };
     if (r) sh.uniforms.tR = { value: r };
-    sh.vertexShader = 'varying vec3 vWPos; varying vec3 vWNor;\n' + sh.vertexShader.replace('#include <project_vertex>',
+    Object.assign(sh.uniforms, uniformes);
+    let v = 'varying vec3 vWPos; varying vec3 vWNor; varying vec3 vLoc; uniform float uTiempo;\n' + verticeAntes + '\n' + sh.vertexShader;
+    if (normalVert) v = v.replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n' + normalVert);
+    v = v.replace('#include <begin_vertex>', '#include <begin_vertex>\n vLoc = position;\n' + vertice);
+    sh.vertexShader = v.replace('#include <project_vertex>',
       '#include <project_vertex>\n vWPos = (modelMatrix * vec4(transformed,1.)).xyz; vWNor = normalize(mat3(modelMatrix) * objectNormal);');
     let f = GLSL_COMUN + `\nuniform sampler2D tMacro; uniform float uEsc, uMacro, uNorm, uRug;\n${c ? 'uniform sampler2D tC;' : ''}${n ? 'uniform sampler2D tN;' : ''}${r ? 'uniform sampler2D tR;' : ''}\n${antes}\n` + sh.fragmentShader;
     f = f.replace('#include <map_fragment>', `${conservar ? '#include <map_fragment>' : ''}
@@ -320,6 +440,7 @@ function conMundo(mat, opciones) {
       ${c ? 'vec4 colT = triAnti(tC, uEsc, smoothstep(.35,.65,mac.b)); diffuseColor.rgb *= colT.rgb;' : ''}
       diffuseColor.rgb *= mix(1., 0.78 + 0.44*mac.r, uMacro);
       ${extra}`);
+    if (luz) f = f.replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n' + luz);
     if (r) f = f.replace('#include <roughnessmap_fragment>', 'float roughnessFactor = clamp(roughness * tri(tR, uEsc).g * uRug, 0.02, 1.);');
     if (n) f = f.replace('#include <normal_fragment_maps>', `{
       vec3 w = pesosTri();
@@ -336,12 +457,37 @@ function conMundo(mat, opciones) {
 }
 
 const GLSL_CAUSTICAS = /* glsl */`
-  float causticas(vec2 uv, float t){
-    vec2 p = mod(uv*6.28318, 6.28318) - 250.; vec2 i = p; float c = 1.; float k = .005;
-    for (int n=0; n<4; n++){ float tt = t*(1.-(3.5/float(n+1)));
-      i = p + vec2(cos(tt-i.x)+sin(tt+i.y), sin(tt-i.y)+cos(tt+i.x));
-      c += 1./length(vec2(p.x/(sin(i.x+tt)/k), p.y/(cos(i.y+tt)/k))); }
-    c /= 4.; c = 1.17 - pow(c, 1.4); return pow(abs(c), 8.); }`;
+  vec2 hC(vec2 p){ p = vec2(dot(p,vec2(127.1,311.7)), dot(p,vec2(269.5,183.3))); return fract(sin(p)*43758.5453); }
+  float vorC(vec2 p, float t){
+    vec2 i = floor(p), f = fract(p); float d1 = 8., d2 = 8.;
+    for (int y=-1; y<=1; y++) for (int x=-1; x<=1; x++){
+      vec2 g = vec2(float(x), float(y)); vec2 o = hC(i+g); o = 0.5 + 0.42*sin(t + 6.2831*o);
+      vec2 r = g + o - f; float d = dot(r,r);
+      if (d < d1){ d2 = d1; d1 = d; } else if (d < d2) d2 = d; }
+    return sqrt(d2) - sqrt(d1); }
+  float causticas(vec2 p, float t){
+    vec2 w = p + 0.32*vec2(sin(p.y*0.9 + t*0.7), cos(p.x*0.8 - t*0.6));
+    float e1 = vorC(w, t*0.9), e2 = vorC(w*1.43 + 3.1, t*1.15 + 1.);
+    return pow(1. - smoothstep(0., 0.3, e1), 2.2) + 0.5*pow(1. - smoothstep(0., 0.24, e2), 2.2); }`;
+
+/* Contorno de la isla (x, z) y profundidad del fondo marino */
+const CONTORNO = [[-27.85, -3.05], [-27.35, -2.45], [-27.35, -1.6], [-25.0, 2.65], [-24.85, 4.4], [20.45, 4.4], [20.85, 4.65], [21.95, 4.45], [22.55, 4.8], [33.15, -13.75], [-4.4, -27.45], [-4.85, -26.35], [-5.8, -26.3], [-6.1, -24.6]];
+const NIVEL_MAR = -1.35;
+const GLSL_FONDO = /* glsl */`
+  uniform vec2 uPoli[14];
+  float distIsla(vec2 p){
+    float d = dot(p-uPoli[0], p-uPoli[0]); float s = 1.;
+    for (int i=0, j=13; i<14; j=i, i++){
+      vec2 e = uPoli[j]-uPoli[i]; vec2 w = p-uPoli[i];
+      vec2 b = w - e*clamp(dot(w,e)/dot(e,e), 0., 1.); d = min(d, dot(b,b));
+      bvec3 c = bvec3(p.y>=uPoli[i].y, p.y<uPoli[j].y, e.x*w.y>e.y*w.x);
+      if (all(c) || all(not(c))) s *= -1.; }
+    return s*sqrt(d); }
+  float fondoMar(vec2 p){
+    float d = max(distIsla(p), 0.);
+    float y = -2.9 - 0.9*smoothstep(2., 16., d) - 6.0*smoothstep(18., 130., d) - 22.*smoothstep(120., 700., d);
+    return y + 0.35*sin(p.x*0.05 + sin(p.y*0.04)*2.)*smoothstep(8., 40., d); }`;
+const uPoli = { value: CONTORNO.map(([x, z]) => new THREE.Vector2(x, z)) };
 
 function mejorarMateriales(modelo) {
   const T = {
@@ -386,8 +532,11 @@ function mejorarMateriales(modelo) {
         setC(0xffffff); m.roughness = 1; m.metalness = 0;
         conMundo(m, { c: T.adoquin[0], n: T.adoquin[1], r: T.adoquin[2], escala: 1.6, macro: 0.25, normal: 0.8 }); break;
       case nm === 'MI_Borde_Piscina':
-        setC(0xffffff); m.roughness = 1; m.metalness = 0;
-        conMundo(m, { c: T.travertino[0], n: T.travertino[1], r: T.travertino[2], escala: 2.4, macro: 0.15, normal: 0.6 }); break;
+        setC(0xffffff); m.roughness = 1; m.metalness = 0; m.side = THREE.DoubleSide;
+        conMundo(m, { c: T.travertino[0], n: T.travertino[1], r: T.travertino[2], escala: 2.4, macro: 0.15, normal: 0.6,
+          antes: GLSL_CAUSTICAS,
+          extra: 'diffuseColor.rgb *= mix(vec3(0.72, 0.9, 0.94), vec3(1.), smoothstep(-0.42, -0.3, vWPos.y));',
+          luz: 'if (vWPos.y < -0.35) reflectedLight.directDiffuse *= 1. + 1.7*causticas(vWPos.xz/0.7, uTiempo*1.25);' }); break;
       case nm === 'MI_Foso_Social':
         setC(0xffffff); m.roughness = 1; m.metalness = 0;
         conMundo(m, { c: T.deck[0], n: T.deck[1], r: T.deck[2], escala: 2.0, macro: 0.15, normal: 0.7 }); break;
@@ -399,17 +548,22 @@ function mejorarMateriales(modelo) {
         break;
       case nm === 'MI_Ext_Fondo_Piscina':
       case nm === 'MI_Jacuzzi_Mosaico':
-        if (nm === 'MI_Ext_Fondo_Piscina') setC(0x6fc6d2);
+        if (nm === 'MI_Ext_Fondo_Piscina') setC(0x8fd6e0);
+        m.side = THREE.DoubleSide;
         conMundo(m, { macro: 0, antes: GLSL_CAUSTICAS, conservar: nm === 'MI_Jacuzzi_Mosaico',
-          extra: 'if (vWPos.y < -0.25) diffuseColor.rgb *= 1. + 1.6*causticas(vWPos.xz/3.2, uTiempo*0.55);' });
+          luz: `if (vWPos.y < ${nm === 'MI_Ext_Fondo_Piscina' ? '-0.3' : '0.25'}) reflectedLight.directDiffuse *= 1. + 1.7*causticas(vWPos.xz/0.7, uTiempo*1.25);` });
         break;
-      case nm.startsWith('MI_Agua_'):
-        o.material = m = new THREE.MeshPhysicalMaterial({
-          name: nm, color: 0x2a9fb0, roughness: 0.03, metalness: 0, transparent: true, opacity: 0.42,
-          normalMap: normalesAgua, normalScale: new THREE.Vector2(0.18, 0.18), envMapIntensity: 0.7,
-          specularIntensity: 1, ior: 1.33, depthWrite: false });
-        aguaMats.push(m); hechos.set(m, true);
+      case nm.startsWith('MI_Agua_'): {
+        const piscina = nm === 'MI_Agua_Piscina';
+        const [mult, add] = materialesAgua({
+          fondoFijo: piscina ? -1.73 : -0.76, absorcion: [0.3, 0.07, 0.055], dispersion: [0.01, 0.12, 0.16],
+          escalas: [0.9, 2.3], fuerza: 0.22 });
+        o.material = mult; o.renderOrder = 2;
+        const capa = new THREE.Mesh(o.geometry, add); capa.renderOrder = 3;
+        o.add(capa);
+        hechos.set(mult, true);
         break;
+      }
       case nm.includes('Vidrio'):
         o.material = m = new THREE.MeshPhysicalMaterial({
           name: nm, color: 0x34474f, roughness: 0.03, metalness: 0.1, transparent: true, opacity: 0.62,
@@ -423,14 +577,41 @@ function mejorarMateriales(modelo) {
       case nm === 'MI_Puerta_Garaje':
         m.metalness = 0.5; m.roughness = 0.4; break;
       case nm.startsWith('MI_Hoja_'):
-        m.color.setRGB(0.86, 0.94, 0.78); m.roughness = 0.6; m.envMapIntensity = 0.6; break;
-      case nm === 'MI_Tronco':
-        setC(0x6a5a48); m.roughness = 0.95; break;
+      case nm === 'MI_Tronco': {
+        const hoja = nm !== 'MI_Tronco';
+        if (hoja) { m.color.setRGB(0.66, 0.74, 0.5); m.roughness = 0.55; m.side = THREE.DoubleSide; }
+        else { setC(0x8a7a66); m.roughness = 0.95; }
+        conMundo(m, { macro: 0, conservar: true, verticeAntes: GLSL_VIENTO, vertice: `viento(transformed, ${hoja ? '1.' : '0.'});`,
+          antes: GLSL_RUIDO + 'uniform vec3 uSolDir;',
+          uniformes: { uSolDir: { value: sol } },
+          extra: hoja ? `
+            float rr = length(vLoc.xz);
+            float nn = vnoise(vLoc*1.7 + floor(vWPos.xzx*0.08)*7.13);
+            diffuseColor.rgb *= 0.62 + 0.6*nn;
+            diffuseColor.rgb *= mix(0.55, 1.0, smoothstep(0.2, 1.4, rr));
+            diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb*vec3(1.35,1.15,0.45), smoothstep(1.7, 2.9, rr)*0.55);` : `
+            diffuseColor.rgb *= 0.85 + 0.3*vnoise(vec3(vLoc.y*6.0, vLoc.x*3., 0.));`,
+          luz: hoja ? `{ vec3 Vd = normalize(cameraPosition - vWPos);
+            float tr = pow(max(dot(-Vd, uSolDir), 0.), 3.);
+            reflectedLight.indirectDiffuse += diffuseColor.rgb * vec3(1.0,0.95,0.6) * (0.2 + 1.6*tr) * 0.45; }` : '' });
+        if (hoja) m.envMapIntensity = 0.5;
+        break;
+      }
       case nm === 'MI_Ext_Fuego':
         m.emissive.set(0xff6a1a); m.emissiveIntensity = 3; break;
     }
   });
   return aguaMats;
+}
+
+const materialesProfundidadViento = new Map();
+function profundidadViento(hoja) {
+  if (materialesProfundidadViento.has(hoja)) return materialesProfundidadViento.get(hoja);
+  const d = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, side: THREE.DoubleSide });
+  d.onBeforeCompile = (sh) => { sh.uniforms.uTiempo = uTiempo; sh.vertexShader = 'uniform float uTiempo;\n' + GLSL_VIENTO + '\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\n viento(transformed, ${hoja ? '1.' : '0.'});`); };
+  d.customProgramCacheKey = () => 'vientoProf' + hoja;
+  materialesProfundidadViento.set(hoja, d);
+  return d;
 }
 
 /* ---------- Postprocesado: oclusión ambiental, brillo suave y tonos AgX ---------- */
@@ -444,7 +625,7 @@ if (ALTA && !new URLSearchParams(location.search).has('sinao')) {
   gtao = new GTAOPass(scene, persp, innerWidth, innerHeight);
   gtao.updateGtaoMaterial({ radius: 1.4, distanceExponent: 1.6, thickness: 2.5, scale: 1.0, samples: 16 });
   gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 5, rings: 2, samples: 16 });
-  gtao.blendIntensity = 0.85;
+  gtao.blendIntensity = 0.6;
   composer.addPass(gtao);
 }
 const PARAMS = new URLSearchParams(location.search);
@@ -457,8 +638,9 @@ function usarCamaraEnPasadas(cam) {
   if (gtao) { gtao.camera = cam; gtao.enabled = cam === persp; }
 }
 
+crearMar([tex('arena_c', true), tex('arena_n'), tex('arena_r')]);
 let aguasPiscina = [];
-const INTENSIDAD_ENTORNO = 0.28;
+const INTENSIDAD_ENTORNO = 0.6;
 
 /* ---------- Plano P1 (2D / 3D) ---------- */
 const texturaPlano = (url) => { const t = texLoader.load(url); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = renderer.capabilities.getMaxAnisotropy(); return t; };
@@ -488,6 +670,7 @@ new GLTFLoader().load('assets/whitehouse.glb', (gltf) => {
       const m = o.material;
       const transl = m.transparent;
       o.castShadow = !transl;
+      if (/^MI_Hoja_|^MI_Tronco$/.test(m.name || '')) o.customDepthMaterial = profundidadViento(m.name !== 'MI_Tronco');
       if (!transl && m.envMapIntensity === 1) m.envMapIntensity = INTENSIDAD_ENTORNO;
       o.receiveShadow = true;
       if (m.aoMap) { m.aoMap = null; m.needsUpdate = true; }   // la oclusión 1x1 exportada oscurece las sombras
@@ -633,8 +816,6 @@ addEventListener('resize', () => {
 renderer.setAnimationLoop(() => {
   const dt = Math.min(reloj.getDelta(), 0.1);
   uTiempo.value += dt;
-  mar.material.uniforms.time.value += dt * 0.55;
-  normalesAgua.offset.set(uTiempo.value * 0.012, uTiempo.value * 0.008);
   nubes.position.copy(camara.position); sky.position.copy(camara.position);
   if (controls.enabled) controls.update();
   composer.render(dt);
